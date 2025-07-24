@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tiny Link Chat</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 600px; margin: 2rem auto; }
+    #messages { border: 1px solid #ccc; padding: 1rem; height: 60vh; overflow-y: auto; }
+    .mine { text-align: right; color: #0b5; }
+    .theirs { text-align: left; color: #06c; }
+    form { display: flex; gap: .5rem; margin-top: 1rem; }
+    input[type=text] { flex: 1; }
+  </style>
+  <script type="module">
+    import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+    const SUPABASE_URL = "https://awegyfxwdimyaxlxrpra.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF3ZWd5Znh3ZGlteWF4bHhycHJhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTMzNDMzNDYsImV4cCI6MjA2ODkxOTM0Nn0.EZePuf2aT3UkGcSn2acQrBawCpER5CJOI6eR63zocsE";
+    const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    // --- Room logic ---
+    function getOrCreateRoomId() {
+      // URL format: /#room-xxxx  (or use /room/xxxx if you do routing)
+      let rid = location.hash.replace("#", "");
+      if (!rid) {
+        rid = "room-" + Math.random().toString(36).slice(2, 8);
+        history.replaceState(null, "", "#" + rid);
+      }
+      return rid;
+    }
+    const roomId = getOrCreateRoomId();
+
+    // Fake user id (per tab). In production use auth or a nicer nickname system.
+    const userId = crypto.randomUUID();
+
+    const messagesEl = document.getElementById("messages");
+    const form = document.getElementById("form");
+    const input = document.getElementById("text");
+    const share = document.getElementById("share");
+    share.value = location.href;
+
+    function addMessage(m) {
+      const div = document.createElement("div");
+      div.className = m.user_id === userId ? "mine" : "theirs";
+      const time = new Date(m.created_at).toLocaleTimeString();
+      div.textContent = `[${time}] ${m.text}`;
+      messagesEl.appendChild(div);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    async function loadHistory() {
+      const { data, error } = await sb
+        .from("messages")
+        .select("*")
+        .eq("room_id", roomId)
+        .order("created_at", { ascending: true })
+        .limit(200);
+      if (error) {
+        console.error(error);
+        return;
+      }
+      data.forEach(addMessage);
+    }
+
+    async function sendMessage(text) {
+      await sb.from("messages").insert({
+        room_id: roomId,
+        user_id: userId,
+        text
+      });
+    }
+
+    // Realtime subscription
+    sb.channel("room:" + roomId)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "messages", filter: `room_id=eq.${roomId}` },
+        (payload) => addMessage(payload.new)
+      )
+      .subscribe();
+
+    // UI events
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      await sendMessage(text);
+    });
+
+    // Kick off
+    document.getElementById("room").textContent = roomId;
+    loadHistory();
+  </script>
+</head>
+<body>
+  <h1>Link Chat</h1>
+  <p>Room: <strong id="room"></strong></p>
+  <p>Share this link so the other person can join:</p>
+  <input id="share" type="text" readonly style="width:100%" />
+
+  <div id="messages"></div>
+
+  <form id="form">
+    <input id="text" type="text" placeholder="Type a message…" autocomplete="off" />
+    <button type="submit">Send</button>
+  </form>
+</body>
+</html>
